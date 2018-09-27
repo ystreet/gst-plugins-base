@@ -73,6 +73,9 @@ static GstStaticPadTemplate overlay_src_pad_template =
 static gboolean
 gst_gl_overlay_compositor_element_propose_allocation (GstBaseTransform * trans,
     GstQuery * decide_query, GstQuery * query);
+static GstFlowReturn _oce_prepare_output_buffer (GstBaseTransform * bt,
+    GstBuffer * buffer, GstBuffer ** outbuf);
+
 static gboolean gst_gl_overlay_compositor_element_gl_start (GstGLBaseFilter *
     base);
 static void gst_gl_overlay_compositor_element_gl_stop (GstGLBaseFilter * base);
@@ -106,6 +109,8 @@ gst_gl_overlay_compositor_element_class_init (GstGLOverlayCompositorElementClass
 
   GST_BASE_TRANSFORM_CLASS (klass)->propose_allocation =
       gst_gl_overlay_compositor_element_propose_allocation;
+  GST_BASE_TRANSFORM_CLASS (klass)->prepare_output_buffer =
+      _oce_prepare_output_buffer;
 
   GST_GL_FILTER_CLASS (klass)->filter =
       gst_gl_overlay_compositor_element_filter;
@@ -212,12 +217,44 @@ gst_gl_overlay_compositor_element_gl_start (GstGLBaseFilter * base)
   return GST_GL_BASE_FILTER_CLASS (parent_class)->gl_start (base);
 }
 
+static GstFlowReturn
+_oce_prepare_output_buffer (GstBaseTransform * bt,
+    GstBuffer * buffer, GstBuffer ** outbuf)
+{
+  GstGLOverlayCompositorElement *self = GST_GL_OVERLAY_COMPOSITOR_ELEMENT (bt);
+  GstVideoOverlayCompositionMeta *comp_meta;
+
+  if (gst_base_transform_is_passthrough (bt))
+    goto passthrough;
+
+  if (!self->overlay_compositor)
+    return GST_FLOW_NOT_NEGOTIATED;
+
+  comp_meta = gst_buffer_get_video_overlay_composition_meta (buffer);
+  if (!comp_meta)
+    goto passthrough;
+
+  if (gst_video_overlay_composition_n_rectangles (comp_meta->overlay) == 0)
+    goto passthrough;
+
+  return GST_BASE_TRANSFORM_CLASS (parent_class)->prepare_output_buffer (bt,
+      buffer, outbuf);
+
+passthrough:
+  GST_LOG_OBJECT (bt, "passthrough detected, forwarding input buffer");
+  *outbuf = buffer;
+  return GST_FLOW_OK;
+}
+
 static gboolean
 gst_gl_overlay_compositor_element_filter (GstGLFilter * filter,
     GstBuffer * inbuf, GstBuffer * outbuf)
 {
   GstGLOverlayCompositorElement *self =
       GST_GL_OVERLAY_COMPOSITOR_ELEMENT (filter);
+
+  if (inbuf == outbuf)
+    return TRUE;
 
   gst_gl_overlay_compositor_upload_overlays (self->overlay_compositor, inbuf);
 
